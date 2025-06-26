@@ -1,4 +1,4 @@
-module pkg/HaMqtt
+module hamqtt
 
 go 1.24.3
 
