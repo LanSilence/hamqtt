@@ -49,7 +49,7 @@ go build -o hamqtt ./cmd/main.go
 作为库导入和使用:
 
 ```go
-import "github.com/LanSilence/hamqtt/internal/mqtt"
+import "github.com/LanSilence/hamqtt/pkg/mqtt"
 
 func main() {
     cfg := mqtt.MQTTConfig{

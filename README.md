@@ -51,7 +51,7 @@ go build -o hamqtt ./cmd/main.go
 Import and use this package as a library:
 
 ```go
-import "github.com/LanSilence/hamqtt/internal/mqtt"
+import "github.com/LanSilence/hamqtt/pkg/mqtt"
 
 func main() {
     cfg := mqtt.MQTTConfig{

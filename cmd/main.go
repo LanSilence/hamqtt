@@ -7,7 +7,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	mqttclient "github.com/LanSilence/hamqtt/internal/mqtt"
+	mqttclient "github.com/LanSilence/hamqtt/pkg/mqtt"
 )
 
 // CustomSensor 自定义传感器实现
