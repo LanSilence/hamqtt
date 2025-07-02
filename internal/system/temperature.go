@@ -1,4 +1,4 @@
-package hamqtt
+package system
 
 import (
 	"fmt"
@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/LanSilence/hamqtt/pkg"
 )
 
 type Win32_TemperatureProbe struct {
@@ -42,16 +44,16 @@ func getCPUTemperatureLinux() (float32, error) {
 	return 0, fmt.Errorf("CPU temperature not found")
 }
 
-func getDeviceTemperature() float64 {
+func GetDeviceTemperature() float64 {
 	// 这里可以添加获取设备温度的逻辑
-	if getOSType() == "windows" {
+	if pkg.GetOSType() == "windows" {
 		// temp, err := getCPUTemperatureWindows()
 		// if err != nil {
 		// 	fmt.Println("Error getting CPU temperature:", err)
 		// 	return -0.001 // 返回默认值
 		// }
 		return -0.001
-	} else if getOSType() == "linux" {
+	} else if pkg.GetOSType() == "linux" {
 		temp, err := getCPUTemperatureLinux()
 		if err != nil {
 			fmt.Println("Error getting CPU temperature:", err)

@@ -1,4 +1,4 @@
-package hamqtt
+package system
 
 import (
 	"fmt"
@@ -47,7 +47,6 @@ func PrintAllDisksInfo() {
 	}
 	for _, d := range disks {
 		if d.Mountpoint == "/" {
-
 			fmt.Printf("总大小: %d 字节\n", d.Total)
 			fmt.Printf("可用大小: %d 字节\n", d.Free)
 			fmt.Printf("已用大小: %d 字节\n", d.Used)

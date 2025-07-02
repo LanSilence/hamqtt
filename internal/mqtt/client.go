@@ -1,14 +1,15 @@
-package hamqtt
+package mqtt
 
 import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"runtime"
 	"time"
 
 	"os/exec"
 
+	"github.com/LanSilence/hamqtt/internal/system"
+	"github.com/LanSilence/hamqtt/pkg"
 	"github.com/denisbrodbeck/machineid"
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/shirou/gopsutil/cpu"
@@ -18,12 +19,22 @@ import (
 
 var unique_id int = 0
 
+// SensorEntity 定义传感器实体
+type SensorEntity struct {
+	Name              string
+	Description       string
+	DeviceClass       string
+	UnitOfMeasurement string
+	ValueTemplate     string
+}
+
 type SystemInfo struct {
 	CPUUsage    float64 `json:"cpu_usage"`
 	MemUsage    float64 `json:"mem_usage"`
 	DiskUsage   float64 `json:"disk_usage"`
 	PowerStatus string  `json:"power_status"`
 	Temperature float64 `json:"temperature"`
+	// 自定义字段将直接合并到顶层
 }
 
 // type MQTTConfig struct {
@@ -47,6 +58,7 @@ type MQTTClient struct {
 	deviceName      string
 	deviceID        string
 	publishStopChan chan struct{}
+	sensors         []SensorEntity // 直接注册的传感器
 }
 
 var internalHandlers *map[string]mqtt.MessageHandler // 内部主题-回调映射
@@ -109,47 +121,48 @@ func initDevInfo() {
 	}
 */
 func getPayload(name string, device_class string, unit_of_measurement string, value_template string) string {
-	payloadStr := ""
-	if device_class == "switch" {
-		payloadStr = `
-		{
-  			"name": "` + name + `",
-			"command_topic": "homeassistant/switch/` + deviceName + deviceID + `/set",
-  			"state_topic": "homeassistant/sensor/` + deviceName + deviceID + `/state",
-			"unique_id":"` + deviceID + fmt.Sprintf("%d", getUniqueId()) + `",
-			"device_class": "` + device_class + `",
-  			"value_template": "{{ ` + value_template + ` }}",
-			"payload_on": "ON",
-			"payload_off": "OFF",
-  			"device": {
-  			  "identifiers":["` + deviceName + deviceID + `"],
-  			  "name": "` + deviceName + `",
-  			  "manufacturer": "HaPerfMonitor Device"
-  			}
-		}`
-
-	} else {
-		payloadStr = `
-    	{
-  			"name": "` + name + `",
-			"device_class": "` + device_class + `",
-  			"state_topic": "homeassistant/sensor/` + deviceName + deviceID + `/state",
-  			"unit_of_measurement": "` + unit_of_measurement + `",
-			"unique_id":"` + deviceID + fmt.Sprintf("%d", getUniqueId()) + `",
-  			"value_template": "{{ ` + value_template + ` }}",
-  			"device": {
-  			  "identifiers":["` + deviceName + deviceID + `"],
-  			  "name": "` + deviceName + `",
-  			  "manufacturer": "HaPerfMonitor Device"
-  			}
-		}`
+	uniqueID := deviceID + "_" + name
+	payload := map[string]interface{}{
+		"name":               name,
+		"device_class":       device_class,
+		"state_topic":        "homeassistant/sensor/" + deviceName + deviceID + "/state",
+		"unique_id":          uniqueID,
+		"value_template":     "{{ value_json." + value_template + " }}",
+		"availability_topic": "homeassistant/sensor/" + deviceName + deviceID + "/status",
+		"device": map[string]interface{}{
+			"identifiers":  []string{deviceName + deviceID},
+			"name":         deviceName,
+			"manufacturer": "HaPerfMonitor",
+			"model":        "MQTT Monitor",
+			"sw_version":   "1.0",
+		},
 	}
 
-	return payloadStr
+	if device_class == "switch" {
+		payload["command_topic"] = "homeassistant/switch/" + deviceName + deviceID + "/set"
+		payload["payload_on"] = "ON"
+		payload["payload_off"] = "OFF"
+	} else if unit_of_measurement != "" {
+		payload["unit_of_measurement"] = unit_of_measurement
+	}
+
+	jsonData, _ := json.MarshalIndent(payload, "", "  ")
+	return string(jsonData)
 }
 
-func getTopic(device_class string, sensorType string) string {
-	return "homeassistant/" + device_class + "/" + deviceName + deviceID + sensorType + "/config"
+func getTopic(deviceClass string, sensorName string) string {
+	// 根据HomeAssistant MQTT自动发现规范构建主题
+	// 主题格式: homeassistant/<component>/[<node_id>/]<object_id>/config
+	component := "sensor" // 默认为传感器
+	switch deviceClass {
+	case "switch":
+		component = "switch"
+	case "binary_sensor":
+		component = "binary_sensor"
+	case "light":
+		component = "light"
+	}
+	return "homeassistant/" + component + "/" + deviceName + deviceID + "/" + sensorName + "/config"
 }
 
 func NewMQTTClient(cfg MQTTConfig) (*MQTTClient, error) {
@@ -158,18 +171,50 @@ func NewMQTTClient(cfg MQTTConfig) (*MQTTClient, error) {
 		deviceName: deviceName,
 		deviceID:   deviceID,
 	}
+
+	// 注册默认实体
+	defaultEntities := []SensorEntity{
+		{
+			Name:              "memory",
+			Description:       "Memory Usage",
+			DeviceClass:       "humidity",
+			UnitOfMeasurement: "%",
+			ValueTemplate:     "mem_usage",
+		},
+		{
+			Name:              "cpu",
+			Description:       "CPU Usage",
+			DeviceClass:       "humidity",
+			UnitOfMeasurement: "%",
+			ValueTemplate:     "cpu_usage",
+		},
+		{
+			Name:              "power",
+			Description:       "Device Power",
+			DeviceClass:       "switch",
+			UnitOfMeasurement: "",
+			ValueTemplate:     "power_status",
+		},
+		{
+			Name:              "temperature",
+			Description:       "Device Temperature",
+			DeviceClass:       "temperature",
+			UnitOfMeasurement: "°C",
+			ValueTemplate:     "temperature",
+		},
+	}
+
 	broker := cfg.Server + ":" + cfg.Port
 	opts := mqtt.NewClientOptions()
 	opts.AddBroker(broker)
 	opts.SetClientID(cfg.ClientID)
 	opts.SetUsername(cfg.User)
 	opts.SetPassword(cfg.Pass)
-	// 设置LWT，掉线时自动推送OFF
-	opts.SetWill("homeassistant/sensor/"+deviceName+deviceID+"/state", "OFF", 1, true)
+	// 设置LWT和可用性主题
+	opts.SetWill("homeassistant/sensor/"+deviceName+deviceID+"/status", "offline", 1, true)
 	// 注册自动订阅
 	if internalHandlers == nil {
 		internalHandlers = &map[string]mqtt.MessageHandler{"homeassistant/switch/" + deviceName + deviceID + "/set": handlePowerMessage}
-
 	}
 	if internalHandlers != nil {
 		setOnConnectSubscribe(opts)
@@ -178,24 +223,19 @@ func NewMQTTClient(cfg MQTTConfig) (*MQTTClient, error) {
 	if token := client.client.Connect(); token.WaitTimeout(time.Second*5) && token.Error() != nil {
 		return nil, token.Error()
 	}
-	// 发布配置主题
-	mqttTopicMem := getTopic("sensor", "mem")
-	mqttTopicCpu := getTopic("sensor", "cpu")
-	mqttTopicSwitch := getTopic("switch", "power")
-	mqttTopicTemp := getTopic("sensor", "temperature")
+	// 发布在线状态
+	client.client.Publish("homeassistant/sensor/"+deviceName+deviceID+"/status", 1, true, "online")
 
-	payloadMem := getPayload("Memory Usage", "humidity", "%", "value_json.mem_usage")
-	payloadCpu := getPayload("CPU Usage", "humidity", "%", "value_json.cpu_usage")
-	payloadSwitch := getPayload("Device Power", "switch", "", "value_json.power_status")
-	payloadTemp := getPayload("Device Temperature", "temperature", "°C", "value_json.temperature")
+	// 注册自定义实体
 
-	token := client.client.Publish(mqttTopicMem, 1, true, payloadMem)
-
-	client.client.Publish(mqttTopicCpu, 1, true, payloadCpu)
-
-	client.client.Publish(mqttTopicSwitch, 1, true, payloadSwitch)
-	client.client.Publish(mqttTopicTemp, 1, true, payloadTemp)
-	token.Wait()
+	// 发布默认实体配置
+	for _, entity := range defaultEntities {
+		topic := getTopic(entity.DeviceClass, entity.Name)
+		payload := getPayload(entity.Name, entity.DeviceClass,
+			entity.UnitOfMeasurement, entity.ValueTemplate)
+		token := client.client.Publish(topic, 1, true, payload)
+		token.Wait()
+	}
 	client.publishStopChan = make(chan struct{})
 	// 订阅set主题，收到OFF时休眠
 
@@ -268,7 +308,7 @@ func (c *MQTTClient) publishServerStatus() {
 		}
 		cpuAvg := cpuSum / float64(samples)
 		// 仅在 Windows 下修正 cpuAvg
-		if getOSType() == "windows" && cpuAvg < 10 {
+		if pkg.GetOSType() == "windows" && cpuAvg < 10 {
 			cpuAvg = cpuAvg * 10
 		}
 		mem, _ := mem.VirtualMemory()
@@ -276,22 +316,85 @@ func (c *MQTTClient) publishServerStatus() {
 		disks, _ := disk.Usage("/")
 		diskPercent := float64(disks.Used) / float64(disks.Total) * 100
 		PowerStatus := "ON"
-		temperature := getDeviceTemperature()
-		info := SystemInfo{
-			CPUUsage:    cpuAvg,
-			MemUsage:    memPercent,
-			DiskUsage:   diskPercent,
-			PowerStatus: PowerStatus, // 新增字段
-			Temperature: temperature, // 新增字段
+		temperature := system.GetDeviceTemperature()
+		// 创建基础状态信息
+		info := map[string]interface{}{
+			"cpu_usage":    cpuAvg,
+			"mem_usage":    memPercent,
+			"disk_usage":   diskPercent,
+			"power_status": PowerStatus,
+			"temperature":  temperature,
 		}
+
 		stateTopic := "homeassistant/sensor/" + c.deviceName + c.deviceID + "/state"
 		payload, err := json.Marshal(info)
 		if err != nil {
 			panic(err)
 		}
-		token := c.client.Publish(stateTopic, 0, false, payload)
+		fmt.Printf("[%s] Publishing system status: CPU=%.1f%%, Mem=%.1f%%, Disk=%.1f%%\n",
+			time.Now().Format("2006-01-02 15:04:05"),
+			info["cpu_usage"],
+			info["mem_usage"],
+			info["disk_usage"])
+		token := c.client.Publish(stateTopic, 1, true, payload)
 		token.Wait()
 		time.Sleep(2 * time.Second)
+	}
+}
+
+// RegisterSensor 直接注册一个传感器实体
+// commandHandler - 处理命令消息的可选回调
+// stateHandler - 返回当前状态值的可选回调
+func (c *MQTTClient) RegisterSensor(entity SensorEntity,
+	commandHandler mqtt.MessageHandler,
+	stateHandler func() interface{}) {
+
+	c.sensors = append(c.sensors, entity)
+	topic := getTopic(entity.DeviceClass, entity.Name)
+	payload := getPayload(entity.Description, entity.DeviceClass,
+		entity.UnitOfMeasurement, entity.ValueTemplate)
+	if c.client != nil && c.client.IsConnected() {
+		c.client.Publish(topic, 1, true, payload)
+
+		// 注册命令处理handler
+		if commandHandler != nil {
+			MqttSetTopicHandlers(map[string]mqtt.MessageHandler{
+				"homeassistant/" + entity.DeviceClass + "/" + c.deviceName + c.deviceID + "/" + entity.Name + "/set": commandHandler,
+			})
+			if c.client.IsConnected() {
+				token := c.client.Subscribe(
+					"homeassistant/"+entity.DeviceClass+"/"+c.deviceName+c.deviceID+"/"+entity.Name+"/set",
+					1,
+					commandHandler,
+				)
+				token.Wait()
+			}
+		}
+
+		// 注册状态更新处理
+		if stateHandler != nil {
+			go func() {
+				ticker := time.NewTicker(2 * time.Second)
+				defer ticker.Stop()
+				for {
+					select {
+					case <-ticker.C:
+						state := stateHandler()
+						payload, _ := json.Marshal(map[string]interface{}{
+							entity.ValueTemplate: state,
+						})
+						c.client.Publish(
+							"homeassistant/sensor/"+c.deviceName+c.deviceID+"/state",
+							1,
+							true,
+							payload,
+						)
+					case <-c.publishStopChan:
+						return
+					}
+				}
+			}()
+		}
 	}
 }
 
@@ -307,7 +410,7 @@ func (c *MQTTClient) Stop() {
 
 // 跨平台休眠辅助函数
 func crossPlatformSuspend() error {
-	osType := getOSType()
+	osType := pkg.GetOSType()
 	switch osType {
 	case "windows":
 		return exec.Command("cmd", "/C", "rundll32.exe powrprof.dll,SetSuspendState 0,1,0").Run()
@@ -318,8 +421,4 @@ func crossPlatformSuspend() error {
 	default:
 		return fmt.Errorf("不支持的操作系统: %s", osType)
 	}
-}
-
-func getOSType() string {
-	return runtime.GOOS
 }
