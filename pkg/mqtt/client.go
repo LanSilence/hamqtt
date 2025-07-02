@@ -331,11 +331,6 @@ func (c *MQTTClient) publishServerStatus() {
 		if err != nil {
 			panic(err)
 		}
-		fmt.Printf("[%s] Publishing system status: CPU=%.1f%%, Mem=%.1f%%, Disk=%.1f%%\n",
-			time.Now().Format("2006-01-02 15:04:05"),
-			info["cpu_usage"],
-			info["mem_usage"],
-			info["disk_usage"])
 		token := c.client.Publish(stateTopic, 1, true, payload)
 		token.Wait()
 		time.Sleep(2 * time.Second)
