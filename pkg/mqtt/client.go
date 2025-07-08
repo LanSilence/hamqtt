@@ -127,7 +127,7 @@ func getPayload(name string, device_class string, unit_of_measurement string, va
 		"device_class":       device_class,
 		"state_topic":        "homeassistant/sensor/" + deviceName + deviceID + "/state",
 		"unique_id":          uniqueID,
-		"value_template":     "{{ value_json." + value_template + " }}",
+		"value_template":     "{{ " + value_template + " }}",
 		"availability_topic": "homeassistant/sensor/" + deviceName + deviceID + "/status",
 		"device": map[string]interface{}{
 			"identifiers":  []string{deviceName + deviceID},
@@ -179,28 +179,28 @@ func NewMQTTClient(cfg MQTTConfig) (*MQTTClient, error) {
 			Description:       "Memory Usage",
 			DeviceClass:       "humidity",
 			UnitOfMeasurement: "%",
-			ValueTemplate:     "mem_usage",
+			ValueTemplate:     "json.mem_usage",
 		},
 		{
 			Name:              "cpu",
 			Description:       "CPU Usage",
 			DeviceClass:       "humidity",
 			UnitOfMeasurement: "%",
-			ValueTemplate:     "cpu_usage",
+			ValueTemplate:     "json.cpu_usage",
 		},
 		{
 			Name:              "power",
 			Description:       "Device Power",
 			DeviceClass:       "switch",
 			UnitOfMeasurement: "",
-			ValueTemplate:     "power_status",
+			ValueTemplate:     "json.power_status",
 		},
 		{
 			Name:              "temperature",
 			Description:       "Device Temperature",
 			DeviceClass:       "temperature",
 			UnitOfMeasurement: "°C",
-			ValueTemplate:     "temperature",
+			ValueTemplate:     "json.temperature",
 		},
 	}
 
@@ -211,7 +211,7 @@ func NewMQTTClient(cfg MQTTConfig) (*MQTTClient, error) {
 	opts.SetUsername(cfg.User)
 	opts.SetPassword(cfg.Pass)
 	// 设置LWT和可用性主题
-	opts.SetWill("homeassistant/sensor/"+deviceName+deviceID+"/status", "offline", 1, true)
+	opts.SetWill("homeassistant/sensor/"+deviceName+deviceID+"/status", "OFF", 1, true)
 	// 注册自动订阅
 	if internalHandlers == nil {
 		internalHandlers = &map[string]mqtt.MessageHandler{"homeassistant/switch/" + deviceName + deviceID + "/set": handlePowerMessage}
@@ -346,7 +346,7 @@ func (c *MQTTClient) RegisterSensor(entity SensorEntity,
 
 	c.sensors = append(c.sensors, entity)
 	topic := getTopic(entity.DeviceClass, entity.Name)
-	payload := getPayload(entity.Description, entity.DeviceClass,
+	payload := getPayload(entity.Name, entity.DeviceClass,
 		entity.UnitOfMeasurement, entity.ValueTemplate)
 	if c.client != nil && c.client.IsConnected() {
 		c.client.Publish(topic, 1, true, payload)
