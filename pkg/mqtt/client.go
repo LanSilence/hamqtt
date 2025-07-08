@@ -123,12 +123,11 @@ func initDevInfo() {
 func getPayload(name string, device_class string, unit_of_measurement string, value_template string) string {
 	uniqueID := deviceID + "_" + name
 	payload := map[string]interface{}{
-		"name":               name,
-		"device_class":       device_class,
-		"state_topic":        "homeassistant/sensor/" + deviceName + deviceID + "/state",
-		"unique_id":          uniqueID,
-		"value_template":     "{{ " + value_template + " }}",
-		"availability_topic": "homeassistant/sensor/" + deviceName + deviceID + "/status",
+		"name":           name,
+		"device_class":   device_class,
+		"state_topic":    "homeassistant/sensor/" + deviceName + deviceID + "/state",
+		"unique_id":      uniqueID,
+		"value_template": "{{ " + value_template + " }}",
 		"device": map[string]interface{}{
 			"identifiers":  []string{deviceName + deviceID},
 			"name":         deviceName,
@@ -179,28 +178,28 @@ func NewMQTTClient(cfg MQTTConfig) (*MQTTClient, error) {
 			Description:       "Memory Usage",
 			DeviceClass:       "humidity",
 			UnitOfMeasurement: "%",
-			ValueTemplate:     "json.mem_usage",
+			ValueTemplate:     "value_json.mem_usage",
 		},
 		{
 			Name:              "cpu",
 			Description:       "CPU Usage",
 			DeviceClass:       "humidity",
 			UnitOfMeasurement: "%",
-			ValueTemplate:     "json.cpu_usage",
+			ValueTemplate:     "value_json.cpu_usage",
 		},
 		{
 			Name:              "power",
 			Description:       "Device Power",
 			DeviceClass:       "switch",
 			UnitOfMeasurement: "",
-			ValueTemplate:     "json.power_status",
+			ValueTemplate:     "value_json.power_status",
 		},
 		{
 			Name:              "temperature",
 			Description:       "Device Temperature",
 			DeviceClass:       "temperature",
 			UnitOfMeasurement: "°C",
-			ValueTemplate:     "json.temperature",
+			ValueTemplate:     "value_json.temperature",
 		},
 	}
 
@@ -211,7 +210,7 @@ func NewMQTTClient(cfg MQTTConfig) (*MQTTClient, error) {
 	opts.SetUsername(cfg.User)
 	opts.SetPassword(cfg.Pass)
 	// 设置LWT和可用性主题
-	opts.SetWill("homeassistant/sensor/"+deviceName+deviceID+"/status", "OFF", 1, true)
+	opts.SetWill("homeassistant/sensor/"+deviceName+deviceID+"/status", "OFF", 1, false)
 	// 注册自动订阅
 	if internalHandlers == nil {
 		internalHandlers = &map[string]mqtt.MessageHandler{"homeassistant/switch/" + deviceName + deviceID + "/set": handlePowerMessage}
@@ -375,9 +374,7 @@ func (c *MQTTClient) RegisterSensor(entity SensorEntity,
 					select {
 					case <-ticker.C:
 						state := stateHandler()
-						payload, _ := json.Marshal(map[string]interface{}{
-							entity.ValueTemplate: state,
-						})
+						payload, _ := json.Marshal(state)
 						c.client.Publish(
 							"homeassistant/sensor/"+c.deviceName+c.deviceID+"/state",
 							1,
