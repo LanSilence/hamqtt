@@ -97,10 +97,10 @@ func getUniqueId() int {
 var deviceName string = "unknown"
 var deviceID string = "0000"
 
-func initDevInfo() {
+func initDevInfo(cfg MQTTConfig) {
 	deviceName, _ = os.Hostname()
 	deviceID, _ = machineid.ID()
-	deviceID = deviceID[:4]
+	deviceID = cfg.ClientID
 }
 
 /*
@@ -165,10 +165,10 @@ func getTopic(deviceClass string, sensorName string) string {
 }
 
 func NewMQTTClient(cfg MQTTConfig) (*MQTTClient, error) {
-	initDevInfo()
+	initDevInfo(cfg)
 	client := &MQTTClient{
 		deviceName: deviceName,
-		deviceID:   deviceID,
+		deviceID:   cfg.ClientID,
 	}
 
 	// 注册默认实体
