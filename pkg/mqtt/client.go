@@ -3,6 +3,7 @@ package mqtt
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"time"
 
@@ -19,13 +20,34 @@ import (
 
 var unique_id int = 0
 
-// SensorEntity 定义传感器实体
-type SensorEntity struct {
+type LightOptions struct {
+	SupportsBrightness        bool
+	Brightness_command_topic  string
+	Brightness_scale          int
+	Brightness_state_topic    string
+	Brightness_value_template string
+
+	SupportsRGB          bool
+	Rgb_command_template string //（可选）：定义用于发送给RGB状态的消息的模板。可用变量：red、green和blue。
+	Rgb_command_topic    string //（可选）：用于发布更改灯光RGB状态的MQTT主题。
+	Rgb_state_topic      string //（可选）：订阅以接收RGB状态更新的MQTT主题。
+	Rgb_value_template   string //（可选）：定义提取RGB值的模板。
+
+	SupportsEffects       bool
+	Effect_command_topic  string   //（可选）：用于发布更改灯光效果的MQTT主题。
+	EffectList            []string //（可选）：支持的效果列表。
+	Effect_state_topic    string   //（可选）：订阅以接收灯光效果状态更新的MQTT主题。
+	Effect_value_template string   //（可选）：定义提取灯光效果状态的模板。
+}
+
+// MqttEntity 定义传感器实体
+type MqttEntity struct {
 	Name              string
 	Description       string
 	DeviceClass       string
 	UnitOfMeasurement string
 	ValueTemplate     string
+	ExternalOptions   interface{} // 外部选项
 }
 
 type SystemInfo struct {
@@ -58,7 +80,7 @@ type MQTTClient struct {
 	deviceName      string
 	deviceID        string
 	publishStopChan chan struct{}
-	sensors         []SensorEntity // 直接注册的传感器
+	sensors         []MqttEntity // 直接注册的传感器
 }
 
 var internalHandlers *map[string]mqtt.MessageHandler // 内部主题-回调映射
@@ -120,15 +142,16 @@ func initDevInfo(cfg MQTTConfig) {
 	    }
 	}
 */
-func getPayload(name string, device_class string, unit_of_measurement string, value_template string) string {
-	uniqueID := deviceID + "_" + name
-	payload := map[string]interface{}{
-		"name":           name,
-		"device_class":   device_class,
+func getPayload(entity MqttEntity) map[string]any {
+
+	uniqueID := deviceID + "_" + entity.Name
+	payload := map[string]any{
+		"name":           entity.Name,
+		"device_class":   entity.DeviceClass,
 		"state_topic":    "homeassistant/sensor/" + deviceName + deviceID + "/state",
 		"unique_id":      uniqueID,
-		"value_template": "{{ " + value_template + " }}",
-		"device": map[string]interface{}{
+		"value_template": "{{ " + entity.ValueTemplate + " }}",
+		"device": map[string]any{
 			"identifiers":  []string{deviceName + deviceID},
 			"name":         deviceName,
 			"manufacturer": "HaPerfMonitor",
@@ -137,16 +160,49 @@ func getPayload(name string, device_class string, unit_of_measurement string, va
 		},
 	}
 
-	if device_class == "switch" {
-		payload["command_topic"] = "homeassistant/switch/" + deviceName + deviceID + "/set"
+	if entity.DeviceClass == "switch" {
+		payload["command_topic"] = "homeassistant/switch/" + deviceName + deviceID + "/" + entity.Name + "/set"
 		payload["payload_on"] = "ON"
 		payload["payload_off"] = "OFF"
-	} else if unit_of_measurement != "" {
-		payload["unit_of_measurement"] = unit_of_measurement
+	} else if entity.DeviceClass == "light" {
+		var options *LightOptions = entity.ExternalOptions.(*LightOptions)
+		payload["command_topic"] = "homeassistant/light/" + deviceName + deviceID + "/" + entity.Name + "/set"
+		payload["state_topic"] = "homeassistant/light/" + deviceName + deviceID + "/" + entity.Name + "/state"
+		payload["schema"] = "json"
+		if options != nil {
+			if options.SupportsBrightness {
+				log.Println("亮度控制功能暂未支持")
+				// payload["brightness"] = true
+				// payload["brightness_scale"] = 255
+			}
+
+			if options.SupportsRGB { //暂未支持
+				log.Println("RGB功能暂未支持")
+				// payload["rgb"] = true
+			}
+
+			if options.SupportsEffects {
+				payload["effect"] = true
+				if len(options.EffectList) > 0 {
+					payload["effect_list"] = options.EffectList
+				}
+				if options.Effect_command_topic != "" {
+					payload["effect_command_topic"] = options.Effect_command_topic
+				}
+				if options.Effect_state_topic != "" {
+					payload["effect_state_topic"] = options.Effect_state_topic
+				}
+				if options.Effect_value_template != "" {
+					payload["effect_value_template"] = options.Effect_value_template
+				}
+			}
+		}
+	} else if entity.UnitOfMeasurement != "" {
+		payload["unit_of_measurement"] = entity.UnitOfMeasurement
 	}
 
-	jsonData, _ := json.MarshalIndent(payload, "", "  ")
-	return string(jsonData)
+	return payload
+
 }
 
 func getTopic(deviceClass string, sensorName string) string {
@@ -172,7 +228,7 @@ func NewMQTTClient(cfg MQTTConfig) (*MQTTClient, error) {
 	}
 
 	// 注册默认实体
-	defaultEntities := []SensorEntity{
+	defaultEntities := []MqttEntity{
 		{
 			Name:              "memory",
 			Description:       "Memory Usage",
@@ -230,9 +286,9 @@ func NewMQTTClient(cfg MQTTConfig) (*MQTTClient, error) {
 	// 发布默认实体配置
 	for _, entity := range defaultEntities {
 		topic := getTopic(entity.DeviceClass, entity.Name)
-		payload := getPayload(entity.Name, entity.DeviceClass,
-			entity.UnitOfMeasurement, entity.ValueTemplate)
-		token := client.client.Publish(topic, 1, true, payload)
+		payload := getPayload(entity)
+		jsonData, _ := json.MarshalIndent(payload, "", "  ")
+		token := client.client.Publish(topic, 1, true, string(jsonData))
 		token.Wait()
 	}
 	client.publishStopChan = make(chan struct{})
@@ -339,16 +395,16 @@ func (c *MQTTClient) publishServerStatus() {
 // RegisterSensor 直接注册一个传感器实体
 // commandHandler - 处理命令消息的可选回调
 // stateHandler - 返回当前状态值的可选回调
-func (c *MQTTClient) RegisterSensor(entity SensorEntity,
+func (c *MQTTClient) RegisterSensor(entity MqttEntity,
 	commandHandler mqtt.MessageHandler,
 	stateHandler func() interface{}) {
 
 	c.sensors = append(c.sensors, entity)
 	topic := getTopic(entity.DeviceClass, entity.Name)
-	payload := getPayload(entity.Name, entity.DeviceClass,
-		entity.UnitOfMeasurement, entity.ValueTemplate)
+	payload := getPayload(entity)
+	jsonData, _ := json.MarshalIndent(payload, "", "  ")
 	if c.client != nil && c.client.IsConnected() {
-		c.client.Publish(topic, 1, true, payload)
+		c.client.Publish(topic, 1, true, string(jsonData))
 
 		// 注册命令处理handler
 		if commandHandler != nil {
@@ -357,16 +413,31 @@ func (c *MQTTClient) RegisterSensor(entity SensorEntity,
 			})
 			if c.client.IsConnected() {
 				token := c.client.Subscribe(
-					"homeassistant/"+entity.DeviceClass+"/"+c.deviceName+c.deviceID+"/"+entity.Name+"/set",
+					payload["command_topic"].(string),
 					1,
 					commandHandler,
 				)
 				token.Wait()
 			}
+
+			if payload["effect_command_topic"] != nil {
+				MqttSetTopicHandlers(map[string]mqtt.MessageHandler{
+					payload["effect_command_topic"].(string): commandHandler,
+				})
+				if c.client.IsConnected() {
+					token := c.client.Subscribe(
+						payload["effect_command_topic"].(string),
+						1,
+						commandHandler,
+					)
+					token.Wait()
+				}
+			}
 		}
 
 		// 注册状态更新处理
 		if stateHandler != nil {
+			topic := payload["state_topic"].(string)
 			go func() {
 				ticker := time.NewTicker(2 * time.Second)
 				defer ticker.Stop()
@@ -376,7 +447,7 @@ func (c *MQTTClient) RegisterSensor(entity SensorEntity,
 						state := stateHandler()
 						payload, _ := json.Marshal(state)
 						c.client.Publish(
-							"homeassistant/sensor/"+c.deviceName+c.deviceID+"/state",
+							topic,
 							1,
 							true,
 							payload,
@@ -386,6 +457,30 @@ func (c *MQTTClient) RegisterSensor(entity SensorEntity,
 					}
 				}
 			}()
+
+			if payload["effect_state_topic"] != nil {
+				topic := payload["effect_state_topic"].(string)
+				go func() {
+					ticker := time.NewTicker(2 * time.Second)
+					defer ticker.Stop()
+					for {
+						select {
+						case <-ticker.C:
+							state := stateHandler()
+							payload, _ := json.Marshal(state)
+							c.client.Publish(
+								topic,
+								1,
+								true,
+								payload,
+							)
+						case <-c.publishStopChan:
+							return
+						}
+					}
+				}()
+
+			}
 		}
 	}
 }
