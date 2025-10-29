@@ -266,10 +266,10 @@ func NewMQTTClient(cfg MQTTConfig) (*MQTTClient, error) {
 	opts.SetUsername(cfg.User)
 	opts.SetPassword(cfg.Pass)
 	// 设置LWT和可用性主题
-	opts.SetWill("homeassistant/sensor/"+deviceName+deviceID+"/status", "OFF", 1, false)
+	opts.SetWill("homeassistant/sensor/"+deviceName+deviceID+"/status", `{"power_status":"OFF"}`, 1, false)
 	// 注册自动订阅
 	if internalHandlers == nil {
-		internalHandlers = &map[string]mqtt.MessageHandler{"homeassistant/switch/" + deviceName + deviceID + "/set": handlePowerMessage}
+		internalHandlers = &map[string]mqtt.MessageHandler{"homeassistant/switch/" + deviceName + deviceID + "/power/set": handlePowerMessage}
 	}
 	if internalHandlers != nil {
 		setOnConnectSubscribe(opts)
