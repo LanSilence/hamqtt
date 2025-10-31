@@ -9,6 +9,8 @@ import (
 
 	"os/exec"
 
+	"maps"
+
 	"github.com/LanSilence/hamqtt/internal/system"
 	"github.com/LanSilence/hamqtt/pkg"
 	"github.com/denisbrodbeck/machineid"
@@ -43,11 +45,13 @@ type LightOptions struct {
 // MqttEntity 定义传感器实体
 type MqttEntity struct {
 	Name              string
+	Component         string // 组件类型: sensor, switch, light, button 等
 	Description       string
-	DeviceClass       string
-	UnitOfMeasurement string
-	ValueTemplate     string
-	ExternalOptions   interface{} // 外部选项
+	DeviceClass       string         // 设备显示的图标类型
+	UnitOfMeasurement string         // 单位
+	ValueTemplate     string         // 状态值模板 value_json.xxx
+	OtherConfig       map[string]any // 外部选项
+	ExternalOptions   interface{}    // 外部选项
 }
 
 type SystemInfo struct {
@@ -148,7 +152,7 @@ func getPayload(entity MqttEntity) map[string]any {
 	payload := map[string]any{
 		"name":           entity.Name,
 		"device_class":   entity.DeviceClass,
-		"state_topic":    "homeassistant/sensor/" + deviceName + deviceID + "/state",
+		"state_topic":    "homeassistant/" + entity.Component + "/" + deviceName + deviceID + "/state",
 		"unique_id":      uniqueID,
 		"value_template": "{{ " + entity.ValueTemplate + " }}",
 		"device": map[string]any{
@@ -160,11 +164,16 @@ func getPayload(entity MqttEntity) map[string]any {
 		},
 	}
 
-	if entity.DeviceClass == "switch" {
+	if entity.ExternalOptions != nil {
+		// 循环遍历 entity.ExternalOptions中的内容
+		maps.Copy(payload, entity.OtherConfig)
+	}
+
+	if entity.Component == "switch" {
 		payload["command_topic"] = "homeassistant/switch/" + deviceName + deviceID + "/" + entity.Name + "/set"
 		payload["payload_on"] = "ON"
 		payload["payload_off"] = "OFF"
-	} else if entity.DeviceClass == "light" {
+	} else if entity.Component == "light" {
 		var options *LightOptions = entity.ExternalOptions.(*LightOptions)
 		payload["command_topic"] = "homeassistant/light/" + deviceName + deviceID + "/" + entity.Name + "/set"
 		payload["state_topic"] = "homeassistant/light/" + deviceName + deviceID + "/" + entity.Name + "/state"
@@ -197,6 +206,8 @@ func getPayload(entity MqttEntity) map[string]any {
 				}
 			}
 		}
+	} else if entity.Component == "button" {
+		payload["command_topic"] = "homeassistant/button/" + deviceName + deviceID + "/" + entity.Name + "/set"
 	} else if entity.UnitOfMeasurement != "" {
 		payload["unit_of_measurement"] = entity.UnitOfMeasurement
 	}
@@ -205,18 +216,9 @@ func getPayload(entity MqttEntity) map[string]any {
 
 }
 
-func getTopic(deviceClass string, sensorName string) string {
+func getTopic(component string, sensorName string) string {
 	// 根据HomeAssistant MQTT自动发现规范构建主题
 	// 主题格式: homeassistant/<component>/[<node_id>/]<object_id>/config
-	component := "sensor" // 默认为传感器
-	switch deviceClass {
-	case "switch":
-		component = "switch"
-	case "binary_sensor":
-		component = "binary_sensor"
-	case "light":
-		component = "light"
-	}
 	return "homeassistant/" + component + "/" + deviceName + deviceID + "/" + sensorName + "/config"
 }
 
@@ -232,6 +234,7 @@ func NewMQTTClient(cfg MQTTConfig) (*MQTTClient, error) {
 		{
 			Name:              "memory",
 			Description:       "Memory Usage",
+			Component:         "sensor",
 			DeviceClass:       "humidity",
 			UnitOfMeasurement: "%",
 			ValueTemplate:     "value_json.mem_usage",
@@ -239,6 +242,7 @@ func NewMQTTClient(cfg MQTTConfig) (*MQTTClient, error) {
 		{
 			Name:              "cpu",
 			Description:       "CPU Usage",
+			Component:         "sensor",
 			DeviceClass:       "humidity",
 			UnitOfMeasurement: "%",
 			ValueTemplate:     "value_json.cpu_usage",
@@ -246,6 +250,7 @@ func NewMQTTClient(cfg MQTTConfig) (*MQTTClient, error) {
 		{
 			Name:              "power",
 			Description:       "Device Power",
+			Component:         "switch",
 			DeviceClass:       "switch",
 			UnitOfMeasurement: "",
 			ValueTemplate:     "value_json.power_status",
@@ -253,6 +258,7 @@ func NewMQTTClient(cfg MQTTConfig) (*MQTTClient, error) {
 		{
 			Name:              "temperature",
 			Description:       "Device Temperature",
+			Component:         "sensor",
 			DeviceClass:       "temperature",
 			UnitOfMeasurement: "°C",
 			ValueTemplate:     "value_json.temperature",
@@ -266,7 +272,7 @@ func NewMQTTClient(cfg MQTTConfig) (*MQTTClient, error) {
 	opts.SetUsername(cfg.User)
 	opts.SetPassword(cfg.Pass)
 	// 设置LWT和可用性主题
-	opts.SetWill("homeassistant/sensor/"+deviceName+deviceID+"/status", `{"power_status":"OFF"}`, 1, false)
+	opts.SetWill("homeassistant/switch/"+deviceName+deviceID+"/state", `{"power_status":"OFF"}`, 1, false)
 	// 注册自动订阅
 	if internalHandlers == nil {
 		internalHandlers = &map[string]mqtt.MessageHandler{"homeassistant/switch/" + deviceName + deviceID + "/power/set": handlePowerMessage}
@@ -285,7 +291,7 @@ func NewMQTTClient(cfg MQTTConfig) (*MQTTClient, error) {
 
 	// 发布默认实体配置
 	for _, entity := range defaultEntities {
-		topic := getTopic(entity.DeviceClass, entity.Name)
+		topic := getTopic(entity.Component, entity.Name)
 		payload := getPayload(entity)
 		jsonData, _ := json.MarshalIndent(payload, "", "  ")
 		token := client.client.Publish(topic, 1, true, string(jsonData))
@@ -370,15 +376,13 @@ func (c *MQTTClient) publishServerStatus() {
 		memPercent := float64(mem.Used) / float64(mem.Total) * 100
 		disks, _ := disk.Usage("/")
 		diskPercent := float64(disks.Used) / float64(disks.Total) * 100
-		PowerStatus := "ON"
 		temperature := system.GetDeviceTemperature()
 		// 创建基础状态信息
 		info := map[string]interface{}{
-			"cpu_usage":    cpuAvg,
-			"mem_usage":    memPercent,
-			"disk_usage":   diskPercent,
-			"power_status": PowerStatus,
-			"temperature":  temperature,
+			"cpu_usage":   cpuAvg,
+			"mem_usage":   memPercent,
+			"disk_usage":  diskPercent,
+			"temperature": temperature,
 		}
 
 		stateTopic := "homeassistant/sensor/" + c.deviceName + c.deviceID + "/state"
@@ -387,6 +391,15 @@ func (c *MQTTClient) publishServerStatus() {
 			panic(err)
 		}
 		token := c.client.Publish(stateTopic, 1, true, payload)
+		token.Wait()
+
+		stateTopic = "homeassistant/switch/" + c.deviceName + c.deviceID + "/state"
+		payload = []byte(`{"power_status":"ON"}`)
+		if err != nil {
+			panic(err)
+		}
+
+		token = c.client.Publish(stateTopic, 1, true, payload)
 		token.Wait()
 		time.Sleep(2 * time.Second)
 	}
